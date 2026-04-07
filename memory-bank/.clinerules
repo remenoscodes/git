@@ -1,0 +1,43 @@
+# Cline Rules for Git Repository
+
+This file contains project-specific rules and patterns for working with the Git repository.
+
+## Repository Structure
+
+- The Git codebase is primarily written in C with some shell and Perl scripts
+- Built-in commands are implemented in C files in the `builtin/` directory
+- Documentation is written in AsciiDoc format in the `Documentation/` directory
+- Tests are located in the `t/` directory and are primarily shell scripts
+
+## Contribution Workflow
+
+- Contributions are submitted as patches via email, not pull requests
+- Each logical change should be a separate commit with a clear commit message
+- Commit messages should explain the "why" not just the "what"
+- All changes should include tests and documentation updates
+- Patches are reviewed on the mailing list before being accepted
+
+## Coding Standards
+
+- C code follows specific style guidelines outlined in Documentation/CodingGuidelines
+- Tabs are used for indentation (8 spaces wide)
+- Line length should be kept to 80 characters when possible
+- Shell scripts should be POSIX-compatible
+- Error messages follow specific formatting rules
+
+## Testing Requirements
+
+- All changes must pass the existing test suite
+- New features should include new tests
+- Bug fixes should include tests that would have caught the bug
+
+## Documentation Practices
+
+- User-facing documentation is written in AsciiDoc
+- Documentation should be updated alongside code changes
+- Man pages follow a specific format with standard sections
+
+## Memory Management
+
+- Memory allocation and deallocation should be carefully managed
+- Use Git's API for common operations rather than reinventing functionality

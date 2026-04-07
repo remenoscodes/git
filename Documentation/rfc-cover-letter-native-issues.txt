@@ -1,0 +1,159 @@
+Subject: [RFC PATCH 0/N] Native Git Issues with External Provider Bridges
+
+From: Emerson Soares <remenoscodes@gmail.com>
+To: git@vger.kernel.org
+Cc: Junio C Hamano <gitster@pobox.com>
+Date: Wed, 23 Apr 2025 01:13:00 -0300
+
+This RFC proposes a new feature for Git: native issue tracking with bridges to
+external providers. The goal is to enable Git to track issues directly within
+the repository, using Git's own data structures and mechanisms, while also
+providing bidirectional integration with external issue tracking systems like
+GitHub, GitLab, etc.
+
+Motivation
+----------
+
+Issue tracking is a fundamental part of software development, but Git currently
+lacks built-in support for it. This forces users to rely on external issue
+tracking systems, which have several drawbacks:
+
+1. Issues are not stored with the code, leading to potential loss of context
+   and history when migrating between hosting providers.
+2. Issues are not available offline, making it difficult to work with them
+   when disconnected from the network.
+3. Issues are not versioned with the same rigor as code, making it difficult
+   to track the evolution of issues over time.
+4. Issues are not easily portable between different hosting providers.
+
+By implementing native issue tracking in Git, we can address these issues while
+maintaining compatibility with existing external issue tracking systems.
+
+Design Philosophy
+----------------
+
+The design of native Git issues follows several key principles:
+
+* Small core, large ecosystem: Keep the core implementation minimal (<2 kLOC)
+  while enabling the community to innovate with bridges and UIs.
+* Data first: Treat issues and comments as first-class citizens, making them
+  immutable and auditable via Git's commit model.
+* Absolute decentralization: Avoid dependency on any central server; each
+  clone contains the complete issue history.
+* Reuse of infrastructure: Leverage existing Git components like packfiles,
+  reflogs, hooks, and merge drivers.
+* Incremental evolution: Start with contrib and lightweight prototypes,
+  iterate via RFCs, and only move to builtin when mature.
+* Consistent UX: Extend Git's familiar interface (commits, refs, for-each-ref)
+  to the issue domain.
+
+Architecture
+-----------
+
+Native Git issues use a dedicated namespace within Git's reference system:
+
+* `refs/issues/XXXX`: Branches for individual issues (XXXX = zero-padded issue ID)
+* `refs/issues/next-id`: Atomic counter for the next available issue ID
+
+Issues are stored as commits with structured metadata in the form of trailers:
+
+* `Title:` string
+* `State:` one of `open|closed|...` (default `open`)
+* `Labels:` comma-separated values
+* `Assignee:` email or username
+* `Code-SHA:` SHA of the commit where a bug was reproduced
+* `Provider-ID:` optional, format `<provider>:<remote-id>`
+
+Comments and state changes are stored as child commits in the issue branch.
+
+Bridge Protocol
+--------------
+
+The bridge protocol uses a text-based format similar to Git's remote helpers:
+
+1. `capabilities` → response: `list, get, put, delete`
+2. `list` → lists `<provider-id> sha:<local-id> state:...`
+3. `get <pid>` → returns complete issue JSON
+4. `put sha:<local-id>` → creates/updates remote; returns `ok <provider-id>`
+5. `delete <pid>` → deletes remote
+
+Implementation
+-------------
+
+The implementation consists of several components:
+
+1. Plumbing commands for issue management:
+   * `git issue-create`: Creates a new issue
+   * `git issue-comment`: Adds a comment to an existing issue
+   * `git issue-state`: Changes the state of an issue
+   * `git issue-ls`: Lists issues with optional filtering
+   * `git issue-show`: Displays the details of an issue
+
+2. Bridge to external providers:
+   * `git issues sync`: Synchronizes issues with external providers
+   * `git-issue-remote-<provider>`: Remote helpers for specific providers
+
+3. Documentation and tests:
+   * Technical specification in `Documentation/technical/native-issues.adoc`
+   * Tests in `t/9000-issue-basic.sh` and `t/9001-issue-bridge.sh`
+
+Current Status
+-------------
+
+This RFC includes a proof-of-concept implementation in the `contrib/` directory.
+The implementation is functional but not yet ready for production use. It
+demonstrates the feasibility and design of the feature, and provides a basis
+for discussion and feedback.
+
+Next Steps
+---------
+
+1. Gather feedback from the community on the design and implementation
+2. Refine the implementation based on feedback
+3. Move the code to builtin/ for inclusion in Git core
+
+Changes Since Previous Version
+-----------------------------
+
+This is the first version of this RFC.
+
+Patches
+-------
+
+The patch series consists of the following patches:
+
+1. Documentation: Add technical specification for native Git issues
+2. contrib: Add git-issue-create command
+3. contrib: Add git-issue-comment command
+4. contrib: Add git-issue-state command
+5. contrib: Add git-issue-ls command
+6. contrib: Add git-issue-show command
+7. contrib: Add git-issue-remote-github bridge
+8. contrib: Add git-issues-sync command
+9. t: Add tests for native Git issues
+
+Your Name (N):
+  Documentation/technical/native-issues.adoc                 | 300 +++++++++++++
+  contrib/git-issue/git-issue-create                         | 150 +++++++
+  contrib/git-issue/git-issue-comment                        | 100 +++++
+  contrib/git-issue/git-issue-state                          | 120 ++++++
+  contrib/git-issue/git-issue-ls                             | 180 ++++++++
+  contrib/git-issue/git-issue-show                           | 130 ++++++
+  contrib/issue-remote/git-issue-remote-github               | 250 +++++++++++
+  contrib/git-issue/git-issues-sync                          | 200 +++++++++
+  t/9000-issue-basic.sh                                      | 100 +++++
+  t/9001-issue-bridge.sh                                     | 120 ++++++
+  10 files changed, 1650 insertions(+)
+  create mode 100644 Documentation/technical/native-issues.adoc
+  create mode 100755 contrib/git-issue/git-issue-create
+  create mode 100755 contrib/git-issue/git-issue-comment
+  create mode 100755 contrib/git-issue/git-issue-state
+  create mode 100755 contrib/git-issue/git-issue-ls
+  create mode 100755 contrib/git-issue/git-issue-show
+  create mode 100755 contrib/issue-remote/git-issue-remote-github
+  create mode 100755 contrib/git-issue/git-issues-sync
+  create mode 100755 t/9000-issue-basic.sh
+  create mode 100755 t/9001-issue-bridge.sh
+
+-- 
+2.42.0

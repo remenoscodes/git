@@ -1,0 +1,225 @@
+#!/bin/sh
+#
+# git-issue-remote-github - Bridge between Git issues and GitHub issues
+#
+
+# Configuration
+# These would normally be read from git config
+GITHUB_TOKEN=${GITHUB_TOKEN:-}
+GITHUB_REPO=${GITHUB_REPO:-}
+GITHUB_OWNER=${GITHUB_OWNER:-}
+
+# API base URL
+API_URL="https://api.github.com"
+
+# Helper functions
+send_error() {
+    echo "error $1" >&2
+    exit 1
+}
+
+require_config() {
+    if [ -z "$GITHUB_TOKEN" ]; then
+        send_error "GITHUB_TOKEN environment variable is not set"
+    fi
+    
+    if [ -z "$GITHUB_REPO" ]; then
+        send_error "GITHUB_REPO environment variable is not set"
+    fi
+    
+    if [ -z "$GITHUB_OWNER" ]; then
+        send_error "GITHUB_OWNER environment variable is not set"
+    fi
+}
+
+# API functions
+github_api_get() {
+    curl -s -H "Authorization: token $GITHUB_TOKEN" \
+         -H "Accept: application/vnd.github.v3+json" \
+         "$API_URL/repos/$GITHUB_OWNER/$GITHUB_REPO/$1"
+}
+
+github_api_post() {
+    curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
+         -H "Accept: application/vnd.github.v3+json" \
+         -H "Content-Type: application/json" \
+         -d "$2" \
+         "$API_URL/repos/$GITHUB_OWNER/$GITHUB_REPO/$1"
+}
+
+github_api_patch() {
+    curl -s -X PATCH -H "Authorization: token $GITHUB_TOKEN" \
+         -H "Accept: application/vnd.github.v3+json" \
+         -H "Content-Type: application/json" \
+         -d "$2" \
+         "$API_URL/repos/$GITHUB_OWNER/$GITHUB_REPO/$1"
+}
+
+# Command handlers
+cmd_capabilities() {
+    echo "list"
+    echo "get"
+    echo "put"
+    echo "delete"
+    echo ""
+}
+
+cmd_list() {
+    require_config
+    
+    # Get all issues from GitHub
+    issues=$(github_api_get "issues?state=all")
+    
+    # Parse and output in the expected format
+    echo "$issues" | jq -r '.[] | "github:\(.number) sha:\(.number) state:\(.state) title:\(.title)"'
+    
+    echo ""
+}
+
+cmd_get() {
+    require_config
+    
+    # Extract the provider ID
+    provider_id=$(echo "$1" | sed 's/^github://')
+    
+    # Get the issue from GitHub
+    issue=$(github_api_get "issues/$provider_id")
+    
+    # Output the issue in JSON format
+    echo "$issue"
+    
+    echo ""
+}
+
+cmd_put() {
+    require_config
+    
+    # Extract the local ID
+    local_id=$(echo "$1" | sed 's/^sha://')
+    
+    # Get the issue details from Git
+    formatted_id=$(printf "%04d" "$local_id")
+    issue_ref="refs/issues/$formatted_id"
+    
+    if ! git rev-parse --verify "$issue_ref" >/dev/null 2>&1; then
+        send_error "Issue $local_id does not exist"
+    fi
+    
+    # Get issue details
+    root_commit=$(git rev-list --max-parents=0 "$issue_ref")
+    title=$(git log -1 --format="%B" "$root_commit" | grep "^Title:" | sed 's/^Title: //')
+    state=$(git log -1 --format="%B" "$root_commit" | grep "^State:" | sed 's/^State: //')
+    labels=$(git log -1 --format="%B" "$root_commit" | grep "^Labels:" | sed 's/^Labels: //')
+    assignee=$(git log -1 --format="%B" "$root_commit" | grep "^Assignee:" | sed 's/^Assignee: //')
+    provider_id=$(git log -1 --format="%B" "$root_commit" | grep "^Provider-ID:" | sed 's/^Provider-ID: //')
+    
+    # Extract the description
+    description=$(git log -1 --format="%B" "$root_commit" | awk 'BEGIN {p=0} /^$/ {p=1; next} p {print}')
+    
+    # Prepare labels array
+    labels_array="[]"
+    if [ -n "$labels" ]; then
+        labels_array="[$(echo "$labels" | tr ',' '\n' | sed 's/^[ \t]*//;s/[ \t]*$//' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')]"
+    fi
+    
+    # Check if the issue already exists on GitHub
+    if [ -n "$provider_id" ] && [ "${provider_id#github:}" != "$provider_id" ]; then
+        # Update existing issue
+        github_id=${provider_id#github:}
+        
+        # Prepare JSON payload
+        json="{\"title\":\"$title\",\"body\":\"$description\",\"state\":\"$state\""
+        
+        if [ -n "$assignee" ]; then
+            json="$json,\"assignee\":\"$assignee\""
+        fi
+        
+        if [ -n "$labels" ]; then
+            json="$json,\"labels\":$labels_array"
+        fi
+        
+        json="$json}"
+        
+        # Update the issue
+        response=$(github_api_patch "issues/$github_id" "$json")
+        
+        # Extract the issue number
+        issue_number=$(echo "$response" | jq -r '.number')
+        
+        echo "ok github:$issue_number"
+    else
+        # Create new issue
+        
+        # Prepare JSON payload
+        json="{\"title\":\"$title\",\"body\":\"$description\""
+        
+        if [ -n "$assignee" ]; then
+            json="$json,\"assignee\":\"$assignee\""
+        fi
+        
+        if [ -n "$labels" ]; then
+            json="$json,\"labels\":$labels_array"
+        fi
+        
+        json="$json}"
+        
+        # Create the issue
+        response=$(github_api_post "issues" "$json")
+        
+        # Extract the issue number
+        issue_number=$(echo "$response" | jq -r '.number')
+        
+        # Update the issue with the provider ID
+        provider_trailer="Provider-ID: github:$issue_number"
+        
+        # Create a new commit with the provider ID
+        issue_head=$(git rev-parse "$issue_ref")
+        commit_message="$provider_trailer"
+        commit_hash=$(echo "$commit_message" | git commit-tree -p "$issue_head" "$(git mktree </dev/null)")
+        
+        # Update the issue ref
+        git update-ref "$issue_ref" "$commit_hash"
+        
+        echo "ok github:$issue_number"
+    fi
+    
+    echo ""
+}
+
+cmd_delete() {
+    require_config
+    
+    # Extract the provider ID
+    provider_id=$(echo "$1" | sed 's/^github://')
+    
+    # Close the issue on GitHub
+    json="{\"state\":\"closed\"}"
+    response=$(github_api_patch "issues/$provider_id" "$json")
+    
+    echo "ok"
+    echo ""
+}
+
+# Main command loop
+while read -r cmd args; do
+    case "$cmd" in
+        capabilities)
+            cmd_capabilities
+            ;;
+        list)
+            cmd_list
+            ;;
+        get)
+            cmd_get "$args"
+            ;;
+        put)
+            cmd_put "$args"
+            ;;
+        delete)
+            cmd_delete "$args"
+            ;;
+        *)
+            send_error "Unknown command: $cmd"
+            ;;
+    esac
+done

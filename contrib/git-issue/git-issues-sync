@@ -1,0 +1,182 @@
+#!/bin/sh
+#
+# git-issues-sync - Synchronize issues between Git and external providers
+#
+
+SUBDIRECTORY_OK=Yes
+. "$(git --exec-path)/git-sh-setup"
+
+usage() {
+    cat <<EOF
+usage: git issues sync [--provider <provider>]
+
+    --provider <provider>    Specify the provider to sync with (default: auto-detect)
+EOF
+    exit 1
+}
+
+# Parse command line arguments
+provider=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --provider)
+            shift
+            provider="$1"
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            usage
+            ;;
+    esac
+    shift
+done
+
+# Detect the provider from the remote URL if not specified
+if [ -z "$provider" ]; then
+    remote_url=$(git config --get remote.origin.url)
+    
+    if echo "$remote_url" | grep -q "github.com"; then
+        provider="github"
+    elif echo "$remote_url" | grep -q "gitlab.com"; then
+        provider="gitlab"
+    else
+        echo "Error: Could not detect provider from remote URL. Please specify with --provider." >&2
+        exit 1
+    fi
+fi
+
+# Check if the remote helper exists
+remote_helper="git-issue-remote-$provider"
+if ! command -v "$remote_helper" >/dev/null 2>&1; then
+    echo "Error: Remote helper '$remote_helper' not found in PATH." >&2
+    exit 1
+fi
+
+# Format the issue ID with leading zeros
+format_issue_id() {
+    printf "%04d" "$1"
+}
+
+# Get all local issues
+get_local_issues() {
+    git for-each-ref --format="%(refname)" refs/issues/ | grep -v "refs/issues/next-id" | sort
+}
+
+# Extract issue ID from ref
+extract_id() {
+    echo "$1" | sed 's|refs/issues/||'
+}
+
+# Get provider ID from issue
+get_provider_id() {
+    local ref="$1"
+    local root_commit=$(git rev-list --max-parents=0 "$ref")
+    git log -1 --format="%B" "$root_commit" | grep "^Provider-ID:" | sed 's/^Provider-ID: //'
+}
+
+# Sync issues from remote to local
+sync_from_remote() {
+    echo "Fetching issues from $provider..."
+    
+    # Get the list of remote issues
+    remote_issues=$(echo "list" | "$remote_helper")
+    
+    # Process each remote issue
+    echo "$remote_issues" | while read -r line; do
+        if [ -z "$line" ]; then
+            continue
+        fi
+        
+        # Parse the line
+        provider_id=$(echo "$line" | awk '{print $1}')
+        local_id=$(echo "$line" | awk '{print $2}' | sed 's/sha://')
+        state=$(echo "$line" | awk '{print $3}' | sed 's/state://')
+        title=$(echo "$line" | cut -d ' ' -f 4- | sed 's/title://')
+        
+        # Check if the issue already exists locally
+        formatted_id=$(format_issue_id "$local_id")
+        issue_ref="refs/issues/$formatted_id"
+        
+        if git rev-parse --verify "$issue_ref" >/dev/null 2>&1; then
+            # Issue exists locally, check if it needs updating
+            current_provider_id=$(get_provider_id "$issue_ref")
+            
+            if [ "$current_provider_id" != "$provider_id" ]; then
+                echo "Updating local issue #$local_id with remote changes..."
+                
+                # Get the full issue from the remote
+                issue_json=$(echo "get $provider_id" | "$remote_helper")
+                
+                # TODO: Implement proper merging of remote changes
+                # For now, just add a comment with the provider ID if it's different
+                if [ -n "$current_provider_id" ] && [ "$current_provider_id" != "$provider_id" ]; then
+                    message="Updated provider ID: $provider_id"
+                    issue_head=$(git rev-parse "$issue_ref")
+                    commit_message="Provider-ID: $provider_id"
+                    commit_hash=$(echo "$commit_message" | git commit-tree -p "$issue_head" "$(git mktree </dev/null)")
+                    git update-ref "$issue_ref" "$commit_hash"
+                fi
+            fi
+        else
+            # Issue doesn't exist locally, create it
+            echo "Creating local issue #$local_id from remote..."
+            
+            # Get the full issue from the remote
+            issue_json=$(echo "get $provider_id" | "$remote_helper")
+            
+            # Extract issue details from JSON
+            # This is a simplified version; a real implementation would use jq
+            title=$(echo "$issue_json" | grep '"title":' | head -1 | sed 's/.*"title": *"\([^"]*\)".*/\1/')
+            body=$(echo "$issue_json" | grep '"body":' | head -1 | sed 's/.*"body": *"\([^"]*\)".*/\1/')
+            
+            # Create the issue
+            git issue-create --title "$title" -m "$body" --state "$state"
+            
+            # Add the provider ID
+            issue_head=$(git rev-parse "$issue_ref")
+            commit_message="Provider-ID: $provider_id"
+            commit_hash=$(echo "$commit_message" | git commit-tree -p "$issue_head" "$(git mktree </dev/null)")
+            git update-ref "$issue_ref" "$commit_hash"
+        fi
+    done
+}
+
+# Sync issues from local to remote
+sync_to_remote() {
+    echo "Pushing issues to $provider..."
+    
+    # Get all local issues
+    for ref in $(get_local_issues); do
+        id=$(extract_id "$ref")
+        provider_id=$(get_provider_id "$ref")
+        
+        if [ -z "$provider_id" ] || [ "${provider_id#$provider:}" = "$provider_id" ]; then
+            # Issue doesn't have a provider ID or has a different provider, push it
+            echo "Pushing local issue #$id to $provider..."
+            
+            # Push the issue to the remote
+            response=$(echo "put sha:$id" | "$remote_helper")
+            
+            # Check if the push was successful
+            if echo "$response" | grep -q "^ok"; then
+                echo "Successfully pushed issue #$id to $provider"
+            else
+                echo "Error pushing issue #$id to $provider: $response" >&2
+            fi
+        fi
+    done
+}
+
+# Main
+echo "Synchronizing issues with $provider..."
+
+# Sync from remote to local
+sync_from_remote
+
+# Sync from local to remote
+sync_to_remote
+
+echo "Synchronization complete."
