@@ -38,7 +38,11 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -m|--message)
             shift
-            message="$1"
+            if [ -n "$message" ] ; then
+                message=$(printf '%s\n%s' "$message" "$1")
+            else
+                message="$1"
+            fi
             ;;
         --title)
             shift
@@ -70,22 +74,23 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# Validate required fields
-if [ -z "$title" ] && [ -z "$message" ]; then
-    echo "Error: Either title or message must be specified" >&2
-    exit 1
-fi
-
 # If title is not provided, use the first line of the message
 if [ -z "$title" ] && [ -n "$message" ]; then
     title=$(echo "$message" | head -n 1)
 fi
 
+# Validate required fields
+if [ -z "$title" ]; then
+    echo "Error: Either title or message must be specified" >&2
+    exit 1
+fi
+
+
 # Get the next issue ID
 get_next_issue_id() {
-    if [ -f .git/refs/issues/next-id ]; then
-        debug "Reading next-id file"
-        current_id=$(cat .git/refs/issues/next-id)
+    debug "Reading next-id ref"
+    current_id=$(git symbolic-ref next-id 2> /dev/null)
+    if [ $? = 0 ]; then
         debug "Current ID is '$current_id'"
         if ! echo "$current_id" | grep -q '^[0-9][0-9]*$'; then
             echo "Error: Invalid next-id format" >&2
@@ -105,9 +110,9 @@ get_next_issue_id() {
 # Update the next issue ID
 update_next_issue_id() {
     debug "Updating next-id to $1"
-    printf "%s" "$1" > .git/refs/issues/next-id
+    git symbolic-ref next-id "$1"
     debug "After update, next-id content:"
-    cat .git/refs/issues/next-id >&2
+    debug $(git symbolic-ref next-id)
 }
 
 # Format the issue ID with leading zeros

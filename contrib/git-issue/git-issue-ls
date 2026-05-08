@@ -60,7 +60,7 @@ done
 
 # Check if any issues exist
 has_issues() {
-    git for-each-ref refs/issues/ | grep -v "refs/issues/next-id" >/dev/null 2>&1
+    git for-each-ref refs/issues/ > /dev/null 2>&1
 }
 
 if ! has_issues; then
@@ -70,7 +70,7 @@ fi
 
 # List all issue refs
 list_issues() {
-    git for-each-ref --format="%(refname)" refs/issues/ | grep -v "refs/issues/next-id" | sort
+    git for-each-ref --format="%(refname)" refs/issues/ | sort
 }
 
 # Extract issue ID from ref

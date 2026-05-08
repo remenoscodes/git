@@ -41,6 +41,19 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+print_comments() {
+    # Print all commits except the root commit
+    root_commit="$1"
+    issue_head="$2"
+    git log --format="%H %an %ad%n%B%n---" --date=short "$root_commit..$issue_head" | while IFS= read -r line; do
+        if [ "$line" = "---" ]; then
+            printf "\n"
+        else
+            printf "%s\n" "$line"
+        fi
+    done
+}
+
 # Format the issue ID with leading zeros
 format_issue_id() {
     printf "%04d" "$1"
@@ -92,15 +105,10 @@ fi
 
 printf "\n%s\n\n" "$description"
 
-# Print comments and state changes
-printf "Comments and Updates:\n"
-printf "===============================================\n"
-
-# Get all commits except the root commit
-git log --format="%H %an %ad%n%B%n---" --date=short "$root_commit..$issue_head" | while IFS= read -r line; do
-    if [ "$line" = "---" ]; then
-        printf "\n"
-    else
-        printf "%s\n" "$line"
-    fi
-done
+comment_count=$(git rev-list --count "$root_commit..$issue_head")
+if [ "$comment_count" != 0 ] ; then
+	# Print comments and state changes
+	printf "Comments and Updates:\n"
+	printf "===============================================\n"
+	print_comments "$root_commit" "$issue_head"
+fi
